@@ -27,6 +27,7 @@ Standard library only (plus piper-tts in the same Python environment).
 """
 import argparse
 import datetime as dt
+import errno
 import hashlib
 import importlib.metadata
 import json
@@ -46,7 +47,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 SERVICE = "pepa-tts"
-SERVICE_VERSION = "0.1.0"
+SERVICE_VERSION = "0.1.1"
 MAX_UPLOAD_BYTES = 1_000_000          # narration drafts are a few KB
 SYNTH_TIMEOUT_S = 600
 
@@ -399,11 +400,26 @@ def main():
     a = ap.parse_args()
     VOICES_DIR = a.voices.expanduser().resolve()
     if not VOICES_DIR.is_dir():
-        sys.exit(f"voices folder not found: {VOICES_DIR}")
+        sys.exit(f"{SERVICE}: voices folder not found: {VOICES_DIR}")
+
+    # Bind first, announce second, so the banner never claims a port we don't hold.
+    try:
+        httpd = ThreadingHTTPServer((a.host, a.port), Handler)
+    except OSError as e:
+        if e.errno == errno.EADDRINUSE:
+            sys.exit(f"{SERVICE}: port {a.port} is already in use - another server running? "
+                     f"Check with: lsof -iTCP:{a.port} -sTCP:LISTEN")
+        sys.exit(f"{SERVICE}: cannot listen on {a.host}:{a.port}: {e.strerror}")
+
     print(f"{SERVICE} {SERVICE_VERSION} on {a.host}:{a.port}  "
           f"voices={VOICES_DIR}  piper={piper_version()}  "
           f"available={sorted(list_voices())}", file=sys.stderr)
-    ThreadingHTTPServer((a.host, a.port), Handler).serve_forever()
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        print(f"\n{SERVICE}: stopped", file=sys.stderr)
+    finally:
+        httpd.server_close()
 
 
 if __name__ == "__main__":
